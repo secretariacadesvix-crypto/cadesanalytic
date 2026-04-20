@@ -1,0 +1,108 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 210 20% 98%;
+    --foreground: 215 35% 15%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 215 35% 15%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 215 35% 15%;
+
+    --primary: 212 55% 25%;
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 174 60% 30%;
+    --secondary-foreground: 0 0% 100%;
+
+    --muted: 210 20% 94%;
+    --muted-foreground: 215 15% 50%;
+
+    --accent: 174 60% 30%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 214 20% 88%;
+    --input: 214 20% 88%;
+    --ring: 212 55% 25%;
+
+    --radius: 0.625rem;
+
+    --sidebar-background: 212 55% 20%;
+    --sidebar-foreground: 210 40% 96%;
+    --sidebar-primary: 174 60% 45%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 212 50% 28%;
+    --sidebar-accent-foreground: 210 40% 96%;
+    --sidebar-border: 212 45% 30%;
+    --sidebar-ring: 174 60% 45%;
+
+    --chart-1: 212 55% 25%;
+    --chart-2: 174 60% 38%;
+    --chart-3: 38 92% 50%;
+    --chart-4: 262 50% 50%;
+    --chart-5: 0 72% 51%;
+    --chart-6: 195 70% 45%;
+
+    --success: 152 60% 40%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 100%;
+  }
+
+  .dark {
+    --background: 215 35% 10%;
+    --foreground: 210 40% 96%;
+    --card: 215 30% 14%;
+    --card-foreground: 210 40% 96%;
+    --popover: 215 30% 14%;
+    --popover-foreground: 210 40% 96%;
+    --primary: 174 60% 45%;
+    --primary-foreground: 215 35% 10%;
+    --secondary: 212 40% 30%;
+    --secondary-foreground: 210 40% 96%;
+    --muted: 215 25% 18%;
+    --muted-foreground: 215 15% 55%;
+    --accent: 174 50% 35%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 62% 40%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 215 25% 22%;
+    --input: 215 25% 22%;
+    --ring: 174 60% 45%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+  h1, h2, h3, h4, h5, h6 {
+    @apply tracking-tight font-semibold;
+  }
+}
+
+@layer utilities {
+  .glass-card {
+    @apply bg-card/80 backdrop-blur-sm border border-border/50 shadow-sm;
+  }
+  .stat-card {
+    @apply bg-card rounded-xl border border-border/50 p-6 shadow-sm transition-all duration-200 hover:shadow-md;
+  }
+  .section-title {
+    @apply text-lg font-semibold text-foreground tracking-tight;
+  }
+  .table-header {
+    @apply bg-primary/5 text-primary font-medium text-sm;
+  }
+}
