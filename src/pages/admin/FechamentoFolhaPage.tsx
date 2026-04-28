@@ -118,6 +118,9 @@ export default function FechamentoFolhaPage() {
   const [loadingReports, setLoadingReports] = useState(false);
   const [selectedReport, setSelectedReport] = useState<StoredReport | null>(null);
 
+  // ── Descontos globais (aplicados a todos ao carregar o relatório) ──────────
+  const [descontosGlobais, setDescontosGlobais] = useState<DescontoExtra[]>([]);
+
   // ── Cooperados consolidados ────────────────────────────────────────────────
   const [cooperados,   setCooperados]   = useState<CooperadoConsolidado[]>([]);
   const [selectedIds,  setSelectedIds]  = useState<Set<string>>(new Set());
@@ -151,11 +154,26 @@ export default function FechamentoFolhaPage() {
     setLoadingReports(false);
   };
 
+  // ── Aplicar descontos globais em uma lista de cooperados ──────────────────
+  const applyDescontosGlobais = (lista: CooperadoConsolidado[], globals: DescontoExtra[]): CooperadoConsolidado[] => {
+    if (globals.length === 0) return lista;
+    return lista.map(c => {
+      const updated = {
+        ...c,
+        descontosExtras: globals.map(d => ({ ...d, id: genId() })),
+      };
+      return recalcularCooperado(updated);
+    });
+  };
+
   // ── Selecionar relatório → consolidar ─────────────────────────────────────
   const handleSelectReport = (report: StoredReport) => {
     setSelectedReport(report);
     const registros: PlantaoRecord[] = (report.parsed_data as any)?.registros ?? [];
-    const consolidados = consolidarPorCooperado(registros, valoresHora);
+    const consolidados = applyDescontosGlobais(
+      consolidarPorCooperado(registros, valoresHora),
+      descontosGlobais,
+    );
     setCooperados(consolidados);
     setSelectedIds(new Set(consolidados.map(c => c.matricula || c.nome)));
     setTab('folha');
@@ -166,15 +184,46 @@ export default function FechamentoFolhaPage() {
   useEffect(() => {
     if (!selectedReport) return;
     const registros: PlantaoRecord[] = (selectedReport.parsed_data as any)?.registros ?? [];
-    const consolidados = consolidarPorCooperado(registros, valoresHora);
+    const consolidados = applyDescontosGlobais(
+      consolidarPorCooperado(registros, valoresHora),
+      descontosGlobais,
+    );
     setCooperados(consolidados);
     setSelectedIds(prev => {
-      // Mantém apenas IDs que ainda existem; adiciona novos
       const keys = new Set(consolidados.map(c => c.matricula || c.nome));
       const kept = new Set([...prev].filter(k => keys.has(k)));
       return kept.size > 0 ? kept : keys;
     });
   }, [valoresHora]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Helpers para descontos globais ─────────────────────────────────────────
+  const addDescontoGlobal = () => {
+    setDescontosGlobais(prev => [
+      ...prev,
+      { id: genId(), descricao: '', tipo: 'fixo' as const, valor: 0 },
+    ]);
+  };
+
+  const updateDescontoGlobal = (d: DescontoExtra) => {
+    setDescontosGlobais(prev => prev.map(x => x.id === d.id ? d : x));
+  };
+
+  const removeDescontoGlobal = (id: string) => {
+    setDescontosGlobais(prev => prev.filter(x => x.id !== id));
+  };
+
+  // Reaplicar descontos globais na folha atual sem precisar reselecionar
+  const reaplicarDescontosGlobais = () => {
+    if (!selectedReport) return;
+    const registros: PlantaoRecord[] = (selectedReport.parsed_data as any)?.registros ?? [];
+    const consolidados = applyDescontosGlobais(
+      consolidarPorCooperado(registros, valoresHora),
+      descontosGlobais,
+    );
+    setCooperados(consolidados);
+    setSelectedIds(new Set(consolidados.map(c => c.matricula || c.nome)));
+    toast.success('Descontos globais reaplicados a todos os cooperados.');
+  };
 
   // ── Helpers de desconto extra ──────────────────────────────────────────────
   const addDescontoExtra = (key: string) => {
@@ -360,6 +409,66 @@ export default function FechamentoFolhaPage() {
                     {loadingReports && <Loader2 size={14} className="animate-spin mr-1" />}
                     Buscar
                   </Button>
+                </div>
+
+                {/* ── Descontos Globais ── */}
+                <div style={{
+                  background: '#f8fafc',
+                  border: '1.5px solid #e2e8f0',
+                  borderRadius: 10,
+                  padding: '14px 16px',
+                  marginBottom: 20,
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                    <div>
+                      <p style={{ fontSize: '.85rem', fontWeight: 700, color: '#0f2340', margin: 0 }}>
+                        Descontos Padrão
+                      </p>
+                      <p style={{ fontSize: '.72rem', color: '#8a9ab5', margin: '2px 0 0' }}>
+                        Aplicados automaticamente a <strong>todos</strong> os cooperados ao carregar o relatório
+                      </p>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      {selectedReport && descontosGlobais.length > 0 && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={reaplicarDescontosGlobais}
+                          style={{ fontSize: 11, gap: 5, height: 30 }}
+                        >
+                          Reaplicar na folha atual
+                        </Button>
+                      )}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={addDescontoGlobal}
+                        style={{ fontSize: 11, gap: 5, height: 30 }}
+                      >
+                        <Plus size={12} /> Adicionar Desconto
+                      </Button>
+                    </div>
+                  </div>
+
+                  {descontosGlobais.length === 0 ? (
+                    <p style={{ fontSize: '.75rem', color: '#b0bec5', textAlign: 'center', padding: '8px 0', margin: 0 }}>
+                      Nenhum desconto padrão configurado. Clique em "Adicionar Desconto" para lançar descontos que serão aplicados a todos.
+                    </p>
+                  ) : (
+                    <div style={{ marginTop: 4 }}>
+                      {descontosGlobais.map(d => (
+                        <DescontoExtraRow
+                          key={d.id}
+                          desconto={d}
+                          onChange={updateDescontoGlobal}
+                          onRemove={() => removeDescontoGlobal(d.id)}
+                        />
+                      ))}
+                      <p style={{ fontSize: '.7rem', color: '#8a9ab5', margin: '6px 0 0' }}>
+                        {descontosGlobais.length} desconto(s) configurado(s) · Serão lançados para cada cooperado ao selecionar o relatório abaixo
+                      </p>
+                    </div>
+                  )}
                 </div>
 
                 {reports.length === 0 && !loadingReports && clientId && (

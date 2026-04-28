@@ -426,6 +426,231 @@ function groupBySector(records: PlantaoRecord[]): SectorData[] {
     .sort((a, b) => b.valorTotal - a.valorTotal);
 }
 
+// ─── NOVO FORMATO: CADES Financeiro "Relatório de Faturamento" ───────────────
+//
+// Este formato tem colunas: Cooperado | Função | Setor | Diurnos | Noturnos | Total | Horas | Valor Faturado
+// Um único registro por pessoa/setor já agrega diurno+noturno numa mesma linha.
+// A conversão para PlantaoRecord[] divide proporcionalmente horas e valor por turno.
+
+const FUNCOES_NEW_FORMAT: string[] = [
+  'Técnico(a) de Enfermagem',
+  'Enfermeiro(a)',
+  'Assistente Social',
+  'Fonoaudiólogo(a)',
+  'Fisioterapeuta',
+  'Nutricionista',
+  'Psicólogo(a)',
+  'Médico(a)',
+].sort((a, b) => b.length - a.length);
+
+function mapFuncaoProfissao(funcao: string): string {
+  const u = funcao.toUpperCase();
+  if (u.includes('TÉCNICO') || u.includes('TECNICO')) return 'TECNICO DE ENFERMAGEM';
+  if (u.includes('ENFERMEIRO')) return 'ENFERMEIRO';
+  if (u.includes('ASSISTENTE SOCIAL')) return 'ASSISTENTE SOCIAL';
+  if (u.includes('FONOAUDIÓLOGO') || u.includes('FONOAUDIOLOGO')) return 'FONOAUDIÓLOGO';
+  if (u.includes('FISIOTERAPEUTA')) return 'FISIOTERAPEUTA';
+  if (u.includes('NUTRICIONISTA')) return 'NUTRICIONISTA';
+  if (u.includes('PSICÓLOGO') || u.includes('PSICOLOGO')) return 'PSICOLOGO';
+  if (u.includes('MÉDICO') || u.includes('MEDICO')) return 'MÉDICO';
+  return u.trim() || 'NÃO INFORMADO';
+}
+
+const SECTOR_NORMALIZATION_MAP: Record<string, string> = {
+  'bloco cirurgico': 'BLOCO CIRÚRGICO',
+  'bloco cirúrgico': 'BLOCO CIRÚRGICO',
+  'uti cardio': 'UTI CARDIOLÓGICA',
+  'uti cardiológica': 'UTI CARDIOLÓGICA',
+  'uti geral': 'UTI GERAL',
+  'uti neuro': 'UTI NEUROLÓGICA',
+  'uti neurológica': 'UTI NEUROLÓGICA',
+  'internação 1°andar': 'INTERNAÇÃO 1° ANDAR',
+  'internação 1° andar': 'INTERNAÇÃO 1° ANDAR',
+  'internação 2°andar': 'INTERNAÇÃO 2° ANDAR',
+  'internação 2° andar': 'INTERNAÇÃO 2° ANDAR',
+  'internação anexo sus': 'INTERNAÇÃO ANEXO',
+  'internação anexo': 'INTERNAÇÃO ANEXO',
+  'internação terreo': 'INTERNAÇÃO TÉRREO',
+  'internação térreo': 'INTERNAÇÃO TÉRREO',
+  'pronto socorro': 'PRONTO SOCORRO',
+  'hemodinâmica': 'HEMODINÂMICA',
+  'hemodinamica': 'HEMODINÂMICA',
+  'cme': 'CME',
+  'ccih': 'CCIH',
+  'cihdott': 'CIHDOTT',
+};
+
+function normalizeSectorNew(setor: string): string {
+  const key = setor.toLowerCase().trim();
+  return SECTOR_NORMALIZATION_MAP[key] ?? setor.toUpperCase().trim();
+}
+
+interface NewFormatRowRaw {
+  nome: string;
+  funcao: string;
+  setor: string;
+  diurnos: number;
+  noturnos: number;
+  total: number;
+  horas: number;
+  valor: number;
+}
+
+// Padrão de sufixo numérico: D  N  Total  Xh  R$ X,XX
+const NEW_FORMAT_ROW_SUFFIX = /\s+(\d+)\s+(\d+)\s+(\d+)\s+([\d.]+)h\s+R\$\s*([\d.]+,\d{2})\s*$/;
+
+function parseLineNewFormat(line: string): NewFormatRowRaw | null {
+  const match = line.match(NEW_FORMAT_ROW_SUFFIX);
+  if (!match) return null;
+
+  const [fullMatch, d, n, tot, h, v] = match;
+  const diurnos = parseInt(d, 10);
+  const noturnos = parseInt(n, 10);
+  const total = parseInt(tot, 10);
+  const horas = parseFloat(h);
+  const valor = parseNumber(v);
+
+  const prefix = line.substring(0, line.length - fullMatch.length).trim();
+  if (!prefix) return null;
+
+  let nome = '';
+  let funcao = '';
+  let setor = '';
+
+  for (const func of FUNCOES_NEW_FORMAT) {
+    const idx = prefix.indexOf(func);
+    if (idx >= 0) {
+      nome = prefix.substring(0, idx).trim();
+      setor = prefix.substring(idx + func.length).trim();
+      funcao = func;
+      break;
+    }
+  }
+
+  if (!funcao || !nome) return null;
+
+  return {
+    nome: cleanText(nome),
+    funcao,
+    setor: normalizeSectorNew(setor),
+    diurnos,
+    noturnos,
+    total,
+    horas,
+    valor,
+  };
+}
+
+function newFormatRowToRecords(row: NewFormatRowRaw): PlantaoRecord[] {
+  const records: PlantaoRecord[] = [];
+  const profissao = mapFuncaoProfissao(row.funcao);
+  const diaristas = Math.max(0, row.total - row.diurnos - row.noturnos);
+  const totalShifts = row.diurnos + row.noturnos + diaristas;
+
+  if (totalShifts === 0) return records;
+
+  // Divisão proporcional: horas e valor por turno com base na contagem de plantões.
+  // Para trabalhadores com turnos mistos, o valorHora derivado reflete a taxa média —
+  // a folha de pagamento recalcula usando as taxas configuradas de qualquer forma.
+  const horasPerShift = row.horas / totalShifts;
+  const valorPerShift = row.valor / totalShifts;
+
+  const buildRecord = (escalas: number, turno: string): PlantaoRecord => {
+    const totalHoras = Math.round(escalas * horasPerShift * 100) / 100;
+    const valorFinal = Math.round(escalas * valorPerShift * 100) / 100;
+    const valorHora = totalHoras > 0 ? Math.round((valorFinal / totalHoras) * 100) / 100 : 0;
+    return {
+      matricula: '',
+      nome: row.nome,
+      escalas,
+      escalasOriginal: String(escalas),
+      valorHora,
+      totalHoras,
+      totalHorasOriginal: String(totalHoras),
+      valorFinal,
+      valorFinalOriginal: valorFinal.toLocaleString('pt-BR', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }),
+      setor: row.setor,
+      turno,
+      profissao,
+    };
+  };
+
+  if (row.diurnos > 0) records.push(buildRecord(row.diurnos, 'DIURNO'));
+  if (row.noturnos > 0) records.push(buildRecord(row.noturnos, 'NOTURNO'));
+  if (diaristas > 0) records.push(buildRecord(diaristas, 'DIARISTA'));
+
+  return records;
+}
+
+const SKIP_LINE_NEW_FORMAT = /^(Subtotal|Total\b|Setor:|Cooperado|Documento|Emitido|Cliente|CADES|Relatório|Página|DIURNOS|NOTURNOS|DIARISTAS|TOTAL|Resumo)/i;
+
+function extractRecordsFromNewFormat(fullText: string): PlantaoRecord[] {
+  const records: PlantaoRecord[] = [];
+  const lines = fullText.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
+
+  let pendingLine = '';
+
+  for (const line of lines) {
+    if (SKIP_LINE_NEW_FORMAT.test(line)) {
+      pendingLine = '';
+      continue;
+    }
+
+    const combined = pendingLine ? `${pendingLine} ${line}` : line;
+    const row = parseLineNewFormat(combined);
+
+    if (row) {
+      records.push(...newFormatRowToRecords(row));
+      pendingLine = '';
+    } else if (!NEW_FORMAT_ROW_SUFFIX.test(line)) {
+      // Linha sem sufixo numérico pode ser continuação de nome longo (ex: nomes em 2 linhas)
+      pendingLine = combined.length < 120 ? combined : '';
+    } else {
+      pendingLine = '';
+    }
+  }
+
+  return records;
+}
+
+function isNewCadesFinanceiroFormat(fullText: string): boolean {
+  return (
+    fullText.includes('CADES Financeiro') ||
+    (fullText.includes('Relatório de Faturamento') &&
+      fullText.includes('Valor Faturado') &&
+      fullText.includes('Diurnos'))
+  );
+}
+
+function extractMetadataNewFormat(fullText: string): { cliente?: string; periodo?: string } {
+  const result: { cliente?: string; periodo?: string } = {};
+
+  const clienteMatch = fullText.match(/Cliente\s*:\s*(.+?)(?:\n|$)/i);
+  if (clienteMatch) result.cliente = cleanText(clienteMatch[1]);
+
+  // "Período: 20/04/2026 – 26/04/2026"
+  const periodoMatch = fullText.match(/Per[ií]odo\s*:\s*([\d/]+\s*[–\-]\s*[\d/]+)/i);
+  if (periodoMatch) result.periodo = cleanText(periodoMatch[1]);
+
+  return result;
+}
+
+function extractTotalNewFormat(fullText: string): string | undefined {
+  // Header card: "TOTAL FATURADO\nR$ 112.798,80"
+  const headerMatch = fullText.match(/TOTAL FATURADO\s*\n?\s*R\$\s*([\d.,]+)/i);
+  if (headerMatch) return headerMatch[1];
+
+  // Linha de total da tabela resumo: "Total  626  7467.0h  R$ 112.798,80"
+  const rowMatch = fullText.match(/\bTotal\b\s+\d+\s+[\d.]+h\s+R\$\s*([\d.,]+)/i);
+  if (rowMatch) return rowMatch[1];
+
+  return undefined;
+}
+// ─── FIM DO NOVO FORMATO ─────────────────────────────────────────────────────
+
 export async function parsePDF(file: File): Promise<ReportData> {
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
@@ -468,48 +693,62 @@ export async function parsePDF(file: File): Promise<ReportData> {
     }
   }
 
-  const metadata = extractMetadata(fullText);
-  const reportTotals = extractReportTotals(fullText);
-  const registros = extractRecordsFromText(fullText);
+  let registros: PlantaoRecord[];
+  let metadata: { cliente?: string; periodo?: string };
+  let totalOriginal: string | undefined;
+  let subtotalOriginal: string | undefined;
+
+  if (isNewCadesFinanceiroFormat(fullText)) {
+    console.log('[pdfParser] Formato detectado: CADES Financeiro (Relatório de Faturamento)');
+    registros = extractRecordsFromNewFormat(fullText);
+    metadata = extractMetadataNewFormat(fullText);
+    totalOriginal = extractTotalNewFormat(fullText);
+  } else {
+    console.log('[pdfParser] Formato detectado: WebCoop/CADES legado');
+    metadata = extractMetadata(fullText);
+    const reportTotals = extractReportTotals(fullText);
+    registros = extractRecordsFromText(fullText);
+    totalOriginal = reportTotals.totalOriginal;
+    subtotalOriginal = reportTotals.subtotalOriginal;
+
+    // --- Validações do formato legado ---
+    const { totalRegistrosOriginal } = reportTotals;
+    if (totalRegistrosOriginal !== undefined && totalRegistrosOriginal !== registros.length) {
+      console.warn(
+        `[pdfParser] Divergência na contagem de registros: PDF indica ${totalRegistrosOriginal}, extraídos ${registros.length}.`,
+      );
+    }
+
+    const somaLegado = registros.reduce((sum, r) => sum + r.valorFinal, 0);
+    if (totalOriginal) {
+      const totalEsperado = parseNumber(totalOriginal);
+      const diferenca = Math.abs(somaLegado - totalEsperado);
+      if (diferenca > 0.10) {
+        console.warn(
+          `[pdfParser] Divergência no total financeiro: PDF indica R$ ${totalEsperado.toFixed(2)}, soma extraída R$ ${somaLegado.toFixed(2)} (diferença R$ ${diferenca.toFixed(2)}).`,
+        );
+      }
+    }
+
+    for (const r of registros) {
+      if (r.valorHora > 0 && r.totalHoras > 0) {
+        const esperado = Math.round(r.totalHoras * r.valorHora * 100) / 100;
+        const diff = Math.abs(r.valorFinal - esperado);
+        if (diff > 0.05) {
+          console.warn(
+            `[pdfParser] Inconsistência em ${r.nome} (${r.setor}/${r.turno}): ` +
+            `${r.totalHoras}h × R$${r.valorHora} = R$${esperado}, mas valorFinal = R$${r.valorFinal}.`,
+          );
+        }
+      }
+    }
+  }
 
   if (registros.length === 0) {
     throw new Error('Não foi possível extrair registros do PDF. Verifique se o formato é compatível.');
   }
 
-  // --- Validação pós-extração ---
-  const { totalRegistrosOriginal } = reportTotals;
-  if (totalRegistrosOriginal !== undefined && totalRegistrosOriginal !== registros.length) {
-    console.warn(
-      `[pdfParser] Divergência na contagem de registros: PDF indica ${totalRegistrosOriginal}, extraídos ${registros.length}.`,
-    );
-  }
-
   const somaValorFinal = registros.reduce((sum, r) => sum + r.valorFinal, 0);
-  if (reportTotals.totalOriginal) {
-    const totalEsperado = parseNumber(reportTotals.totalOriginal);
-    const diferenca = Math.abs(somaValorFinal - totalEsperado);
-    if (diferenca > 0.10) {
-      console.warn(
-        `[pdfParser] Divergência no total financeiro: PDF indica R$ ${totalEsperado.toFixed(2)}, soma extraída R$ ${somaValorFinal.toFixed(2)} (diferença R$ ${diferenca.toFixed(2)}).`,
-      );
-    }
-  }
-
-  // Validação por linha: valorFinal ≈ totalHoras × vlrHora (tolerância ±0.05)
-  for (const r of registros) {
-    if (r.valorHora > 0 && r.totalHoras > 0) {
-      const esperado = Math.round(r.totalHoras * r.valorHora * 100) / 100;
-      const diff = Math.abs(r.valorFinal - esperado);
-      if (diff > 0.05) {
-        console.warn(
-          `[pdfParser] Inconsistência em ${r.nome} (${r.setor}/${r.turno}): ` +
-          `${r.totalHoras}h × R$${r.valorHora} = R$${esperado}, mas valorFinal = R$${r.valorFinal}.`,
-        );
-      }
-    }
-  }
-  // --- Fim da validação ---
-
   const setores = groupBySector(registros);
   const uniqueProfissionais = new Set(registros.map((record) => record.nome));
   const uniqueProfissoes = [...new Set(registros.map((record) => record.profissao))];
@@ -521,12 +760,12 @@ export async function parsePDF(file: File): Promise<ReportData> {
     totalPlantoes: registros.reduce((sum, record) => sum + record.escalas, 0),
     totalHoras: registros.reduce((sum, record) => sum + record.totalHoras, 0),
     totalSetores: setores.length,
-    valorTotal: reportTotals.totalOriginal ? parseNumber(reportTotals.totalOriginal) : somaValorFinal,
+    valorTotal: totalOriginal ? parseNumber(totalOriginal) : somaValorFinal,
     profissoes: uniqueProfissoes,
     cliente: metadata.cliente,
     periodo: metadata.periodo,
-    subtotalOriginal: reportTotals.subtotalOriginal,
-    totalOriginal: reportTotals.totalOriginal,
+    subtotalOriginal,
+    totalOriginal,
   };
 }
 
