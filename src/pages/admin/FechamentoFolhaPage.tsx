@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import {
   Loader2, FileDown, Plus, Trash2, ChevronDown, ChevronUp,
-  Receipt, Users, AlertCircle, Pencil, Check, X, Save, Calendar,
+  Receipt, Users, AlertCircle, Pencil, Check, X, Save, Calendar, History, FolderOpen,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { AdminNav } from '@/components/AdminNav';
 import { supabase } from '@/lib/supabase';
-import type { StoredReport, Client, FolhaFechamento } from '@/types/database';
+import type { StoredReport, Client, FolhaFechamento, FechamentoSalvo } from '@/types/database';
 import type { PlantaoRecord } from '@/types/report';
 import { fetchValoresHora, calcularValorBruto } from '@/lib/valoresHora';
 import type { ValoresHora } from '@/types/config';
@@ -128,6 +128,10 @@ export default function FechamentoFolhaPage() {
   const [expandedId,   setExpandedId]   = useState<string | null>(null);
   const [valoresHora,  setValoresHora]  = useState<ValoresHora | null>(null);
 
+  // ── Histórico de fechamentos salvos ───────────────────────────────────────
+  const [fechamentosSalvos,    setFechamentosSalvos]    = useState<FechamentoSalvo[]>([]);
+  const [loadingHistorico,     setLoadingHistorico]     = useState(false);
+
   // ── Data de pagamento (aparece em todas as RPAs) ───────────────────────────
   const [dataPagamento, setDataPagamento] = useState('');
 
@@ -148,7 +152,8 @@ export default function FechamentoFolhaPage() {
   useEffect(() => {
     supabase.from('clients').select('*').order('name').then(({ data }) => setClients(data ?? []));
     fetchValoresHora().then(v => setValoresHora(v));
-  }, []);
+    loadFechamentosSalvos();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Buscar relatórios ──────────────────────────────────────────────────────
   const handleBuscar = async () => {
@@ -371,11 +376,12 @@ export default function FechamentoFolhaPage() {
     }
   };
 
-  // ── Salvar fechamento (registra Cota Parte no histórico) ───────────────────
+  // ── Salvar fechamento (registra Cota Parte no histórico + snapshot completo) ─
   const handleSalvarFechamento = async () => {
     if (!clientId || cooperados.length === 0) return;
     setSavingFechamento(true);
     try {
+      // 1. Atualiza histórico de Cota Parte por cooperado
       await supabase.from('folha_fechamentos')
         .delete()
         .eq('client_id', clientId).eq('mes', mes).eq('ano', ano);
@@ -389,16 +395,63 @@ export default function FechamentoFolhaPage() {
           valor_bruto: c.totalBruto,
         })),
       );
-      // Recalcula acumulado com o mês atual já salvo
-      const historico = await fetchHistoricoCotaParte(clientId, '', ''); // busca tudo
-      const comAcumulado = aplicarAcumulado(cooperados, historico);
-      setCooperados(comAcumulado);
-      toast.success('Fechamento salvo! Cota Parte registrada no histórico.');
+
+      // 2. Salva snapshot completo do fechamento
+      const totalBruto   = cooperados.reduce((s, c) => s + c.totalBruto,   0);
+      const totalLiquido = cooperados.reduce((s, c) => s + c.totalLiquido, 0);
+      await supabase.from('fechamentos_salvos')
+        .delete()
+        .eq('client_id', clientId).eq('mes', mes).eq('ano', ano);
+      await supabase.from('fechamentos_salvos').insert({
+        client_id:      clientId,
+        client_nome:    clienteNome,
+        mes, ano,
+        competencia,
+        data_pagamento: dataPagamento || null,
+        total_bruto:    totalBruto,
+        total_liquido:  totalLiquido,
+        num_cooperados: cooperados.length,
+        cooperados_json: cooperados,
+      });
+
+      // 3. Recalcula acumulado com o mês atual já salvo
+      const historico = await fetchHistoricoCotaParte(clientId, '', '');
+      setCooperados(aplicarAcumulado(cooperados, historico));
+
+      // 4. Recarrega o histórico
+      await loadFechamentosSalvos();
+      toast.success('Fechamento salvo! Acesse o histórico para reabrir.');
     } catch {
       toast.error('Erro ao salvar fechamento.');
     } finally {
       setSavingFechamento(false);
     }
+  };
+
+  // ── Carregar histórico de fechamentos salvos ────────────────────────────────
+  const loadFechamentosSalvos = async () => {
+    setLoadingHistorico(true);
+    const { data } = await supabase
+      .from('fechamentos_salvos')
+      .select('*')
+      .order('ano', { ascending: false })
+      .order('mes', { ascending: false });
+    setFechamentosSalvos((data as FechamentoSalvo[]) ?? []);
+    setLoadingHistorico(false);
+  };
+
+  // ── Reabrir fechamento salvo ────────────────────────────────────────────────
+  const handleAbrirFechamento = (f: FechamentoSalvo) => {
+    const coops = f.cooperados_json as CooperadoConsolidado[];
+    setCooperados(coops);
+    setSelectedIds(new Set(coops.map(c => c.matricula || c.nome)));
+    setClientId(f.client_id);
+    setMes(f.mes);
+    setAno(f.ano);
+    setDataPagamento(f.data_pagamento ?? '');
+    setSelectedReport(null);
+    setTab('folha');
+    toast.success(`Fechamento de ${f.competencia} reaberto.`);
   };
 
   // ── Totais dos selecionados ────────────────────────────────────────────────
@@ -449,6 +502,17 @@ export default function FechamentoFolhaPage() {
                   borderRadius: 10, padding: '1px 7px', fontSize: 10, fontWeight: 700,
                 }}>
                   {cooperados.length}
+                </span>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="historico" style={{ gap: 6 }}>
+              <History size={14} /> 3. Histórico
+              {fechamentosSalvos.length > 0 && (
+                <span style={{
+                  marginLeft: 4, background: '#64748b', color: '#fff',
+                  borderRadius: 10, padding: '1px 7px', fontSize: 10, fontWeight: 700,
+                }}>
+                  {fechamentosSalvos.length}
                 </span>
               )}
             </TabsTrigger>
@@ -1010,6 +1074,96 @@ export default function FechamentoFolhaPage() {
                 </Card>
               );
             })}
+          </TabsContent>
+
+          {/* ════════════════════════════════════════════════════════════════
+              TAB 3 — Histórico de Fechamentos
+          ════════════════════════════════════════════════════════════════ */}
+          <TabsContent value="historico">
+            <Card>
+              <CardHeader style={{ paddingBottom: 12 }}>
+                <CardTitle style={{ fontSize: '.95rem', color: '#0f2340', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <History size={16} /> Fechamentos Salvos
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {loadingHistorico && (
+                  <div style={{ display: 'flex', justifyContent: 'center', padding: 24 }}>
+                    <Loader2 size={20} className="animate-spin" style={{ color: '#8a9ab5' }} />
+                  </div>
+                )}
+
+                {!loadingHistorico && fechamentosSalvos.length === 0 && (
+                  <p style={{ fontSize: '.83rem', color: '#8a9ab5', textAlign: 'center', padding: '32px 0' }}>
+                    Nenhum fechamento salvo ainda. Use o botão "Salvar Fechamento" na aba Gerar RPAs.
+                  </p>
+                )}
+
+                {!loadingHistorico && fechamentosSalvos.map(f => (
+                  <div key={f.id} style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 110px 110px 80px auto',
+                    gap: 12, alignItems: 'center',
+                    border: '1.5px solid #e2e8f0', borderRadius: 8,
+                    padding: '12px 16px', marginBottom: 8, background: '#fff',
+                  }}>
+                    {/* Info principal */}
+                    <div>
+                      <p style={{ fontWeight: 700, fontSize: '.88rem', color: '#0f2340', margin: 0 }}>
+                        {f.competencia}
+                      </p>
+                      <p style={{ fontSize: '.73rem', color: '#8a9ab5', margin: '2px 0 0' }}>
+                        {f.client_nome}
+                        {f.data_pagamento && (
+                          <span style={{ marginLeft: 8 }}>
+                            · Pgto: {new Date(f.data_pagamento + 'T12:00:00').toLocaleDateString('pt-BR')}
+                          </span>
+                        )}
+                        <span style={{ marginLeft: 8 }}>· {f.num_cooperados} cooperado(s)</span>
+                      </p>
+                      <p style={{ fontSize: '.68rem', color: '#94a3b8', margin: '2px 0 0' }}>
+                        Salvo em {new Date(f.atualizado_em).toLocaleString('pt-BR')}
+                      </p>
+                    </div>
+
+                    {/* Total Bruto */}
+                    <div style={{ textAlign: 'right' }}>
+                      <p style={{ fontSize: '.6rem', color: '#8a9ab5', fontWeight: 600, margin: '0 0 2px' }}>BRUTO</p>
+                      <p style={{ fontSize: '.85rem', fontWeight: 700, color: '#0f2340', margin: 0 }}>
+                        {fmtR$(f.total_bruto)}
+                      </p>
+                    </div>
+
+                    {/* Total Líquido */}
+                    <div style={{ textAlign: 'right' }}>
+                      <p style={{ fontSize: '.6rem', color: '#8a9ab5', fontWeight: 600, margin: '0 0 2px' }}>LÍQUIDO</p>
+                      <p style={{ fontSize: '.85rem', fontWeight: 700, color: '#16a34a', margin: 0 }}>
+                        {fmtR$(f.total_liquido)}
+                      </p>
+                    </div>
+
+                    {/* Mês/Ano */}
+                    <div style={{ textAlign: 'center' }}>
+                      <span style={{
+                        fontSize: 11, padding: '3px 8px', borderRadius: 6,
+                        background: '#f0f4fa', color: '#0f2340', fontWeight: 600,
+                      }}>
+                        {f.mes.padStart(2, '0')}/{f.ano}
+                      </span>
+                    </div>
+
+                    {/* Botão abrir */}
+                    <Button
+                      size="sm" variant="outline"
+                      onClick={() => handleAbrirFechamento(f)}
+                      style={{ gap: 5, fontSize: 11, borderColor: '#0f2340', color: '#0f2340' }}
+                    >
+                      <FolderOpen size={13} /> Abrir
+                    </Button>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
           </TabsContent>
         </Tabs>
       </div>

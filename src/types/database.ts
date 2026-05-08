@@ -1,5 +1,21 @@
 import type { ReportData } from './report';
 
+export interface FechamentoSalvo {
+  id: string;
+  client_id: string;
+  client_nome: string;
+  mes: string;
+  ano: string;
+  competencia: string;
+  data_pagamento: string | null;
+  total_bruto: number;
+  total_liquido: number;
+  num_cooperados: number;
+  cooperados_json: unknown;
+  criado_em: string;
+  atualizado_em: string;
+}
+
 export interface FolhaFechamento {
   id: string;
   client_id: string;
