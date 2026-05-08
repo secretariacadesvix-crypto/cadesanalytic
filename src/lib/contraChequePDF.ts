@@ -169,10 +169,15 @@ function gerarDemonstrativoDoc(
   const baseIRRF = irrfExtra?.tipo === 'percentual' ? c.totalBruto : 0;
 
   // CRÉDITO — linha única de produtividade total
-  const totalHorasTodas = (c.diurno?.totalHoras ?? 0) + (c.noturno?.totalHoras ?? 0) + (c.outros?.totalHoras ?? 0);
+  // Horas calculadas proporcionalmente ao bruto atual (inclusive após edição manual)
+  const totalHorasOriginal  = (c.diurno?.totalHoras ?? 0) + (c.noturno?.totalHoras ?? 0) + (c.outros?.totalHoras ?? 0);
+  const totalBrutoOriginal  = (c.diurno?.valor ?? 0) + (c.noturno?.valor ?? 0) + (c.outros?.valor ?? 0);
+  const horasEfetivas = totalBrutoOriginal > 0
+    ? Math.round(c.totalBruto / totalBrutoOriginal * totalHorasOriginal * 100) / 100
+    : totalHorasOriginal;
   rows.push([
     String(seq++), '101', 'PRODUTIVIDADE TOTAL',
-    fmtNum(totalHorasTodas),
+    fmtNum(horasEfetivas),
     fmtNum(c.totalBruto), fmtNum(c.totalBruto),
     '', '',
   ]);
