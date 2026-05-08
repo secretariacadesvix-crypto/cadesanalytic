@@ -123,21 +123,16 @@ function extractProfessionFromText(textParts: string[]): { setor: string; profis
 // Valores conhecidos de vlrHora no formato BR (vírgula decimal) e como float.
 // Inclui todos os valores observados nos relatórios CADES/WebCoop para uso como âncora.
 const KNOWN_VLR_HORA_BR = [
-  // ── Taxas HOSPITAL DE ÁVILA ─────────────────────────────────────────────
-  '11,50',  // TECNICO DE ENFERMAGEM DIURNO
-  '12,33',  // TECNICO DE ENFERMAGEM NOTURNO
-  '19,16',  // ENFERMEIRO DIURNO / ASSISTENTE SOCIAL / variantes
-  '20,83',  // ENFERMEIRO NOTURNO
-  '13,83',  // TECNICO HEMODIÁLISE
-  '11,48',  // TECNICO HEMODINÂMICA
-  '12,27',  // variante técnico
-  '12,78',  // variante técnico
-  '14,06',  // variante técnico
-  '16,10',  // variante técnico especial
-  '17,88',  // variante técnico especial
-  // ── Taxas legadas / outros contratos ────────────────────────────────────
-  '12,80', '14,50', '21,40', '25,68', '13,89',
-  // ── Outras taxas comuns em contratos CADES ──────────────────────────────
+  // ── Taxas HOSPITAL DE ÁVILA (relatório de fechamento) ───────────────────
+  '12,80',  // TECNICO DE ENFERMAGEM DIURNO
+  '14,50',  // TECNICO DE ENFERMAGEM NOTURNO
+  '21,40',  // ENFERMEIRO DIURNO / ASSISTENTE SOCIAL
+  '25,68',  // ENFERMEIRO NOTURNO
+  '13,89',  // CCIH / HEMODINÂMICA
+  '15,90',  // HEMODIÁLISE
+  // ── Outras taxas observadas em contratos CADES ──────────────────────────
+  '11,50', '12,33', '19,16', '20,83', '13,83', '11,48',
+  '12,27', '12,78', '14,06', '16,10', '17,88',
   '10,00', '10,50', '11,00', '12,00', '13,00', '15,00', '18,00', '22,00', '25,00',
 ];
 const KNOWN_VLR_HORA_VALUES = KNOWN_VLR_HORA_BR.map(s => parseNumber(s));
@@ -149,8 +144,11 @@ const KNOWN_VLR_HORA_VALUES = KNOWN_VLR_HORA_BR.map(s => parseNumber(s));
  *               com 2 casas decimais, precedido por inteiro ≤ 31 (escalas).
  */
 function findVlrHoraIndex(parts: string[]): number {
-  // Tentativa 1: valor exato conhecido
+  // Tentativa 1: valor exato conhecido — o token DEVE conter vírgula decimal.
+  // Isso evita que números inteiros de escalas (ex: 15) sejam confundidos
+  // com taxas de hora redondas (ex: 15,00) da lista conhecida.
   for (let i = 0; i < parts.length; i++) {
+    if (!parts[i].includes(',')) continue;
     const val = parseNumber(parts[i]);
     if (KNOWN_VLR_HORA_VALUES.some((v) => Math.abs(v - val) < 0.005)) return i;
   }
