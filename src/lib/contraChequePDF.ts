@@ -198,7 +198,7 @@ function gerarDemonstrativoDoc(
   }
 
   rows.push([
-    String(seq++), '202', 'QUOTAS PARTE - 001/010',
+    String(seq++), '202', 'QUOTAS PARTE',
     '', '', '',
     fmtNum(c.cotaParte), fmtNum(c.cotaParteAcumulada ?? c.cotaParte),
   ]);
