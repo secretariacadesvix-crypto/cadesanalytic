@@ -193,7 +193,8 @@ export default function FechamentoFolhaPage() {
     for (const row of data) {
       if (row.mes === mesAtual && row.ano === anoAtual) continue; // exclui mês atual (não salvo ainda)
       const key = row.cooperado_matricula?.trim() || row.cooperado_nome.trim().toLowerCase();
-      mapa.set(key, (mapa.get(key) ?? 0) + Number(row.cota_parte));
+      // Sempre soma R$80 por mês, independente do valor armazenado
+      mapa.set(key, (mapa.get(key) ?? 0) + COTA_PARTE_VALOR);
     }
     return mapa;
   };
@@ -202,7 +203,8 @@ export default function FechamentoFolhaPage() {
     lista.map(c => {
       const key = c.matricula?.trim() || c.nome.trim().toLowerCase();
       const prev = historico.get(key) ?? 0;
-      return { ...c, cotaParteAcumulada: prev + c.cotaParte };
+      // Acumulado = meses anteriores (× R$80) + R$80 do mês atual
+      return { ...c, cotaParteAcumulada: prev + COTA_PARTE_VALOR };
     });
 
   // ── Selecionar relatório → consolidar ─────────────────────────────────────
