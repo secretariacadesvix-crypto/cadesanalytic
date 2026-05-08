@@ -1,5 +1,18 @@
 import type { ReportData } from './report';
 
+export interface FolhaFechamento {
+  id: string;
+  client_id: string;
+  mes: string;
+  ano: string;
+  data_pagamento: string | null;
+  cooperado_nome: string;
+  cooperado_matricula: string | null;
+  cota_parte: number;
+  valor_bruto: number | null;
+  criado_em: string;
+}
+
 export interface Profile {
   id: string;
   role: 'admin' | 'client';

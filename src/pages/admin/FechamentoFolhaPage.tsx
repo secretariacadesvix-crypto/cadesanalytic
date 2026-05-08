@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import {
   Loader2, FileDown, Plus, Trash2, ChevronDown, ChevronUp,
-  Receipt, Users, AlertCircle,
+  Receipt, Users, AlertCircle, Pencil, Check, X, Save, Calendar,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -13,13 +13,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { AdminNav } from '@/components/AdminNav';
 import { supabase } from '@/lib/supabase';
-import type { StoredReport, Client } from '@/types/database';
+import type { StoredReport, Client, FolhaFechamento } from '@/types/database';
 import type { PlantaoRecord } from '@/types/report';
 import { fetchValoresHora, calcularValorBruto } from '@/lib/valoresHora';
 import type { ValoresHora } from '@/types/config';
 import {
   consolidarPorCooperado,
   recalcularCooperado,
+  recalcularComNovoBruto,
   INSS_PERCENTUAL,
   COTA_PARTE_VALOR,
 } from '@/lib/consolidacaoFolha';
@@ -127,6 +128,16 @@ export default function FechamentoFolhaPage() {
   const [expandedId,   setExpandedId]   = useState<string | null>(null);
   const [valoresHora,  setValoresHora]  = useState<ValoresHora | null>(null);
 
+  // ── Data de pagamento (aparece em todas as RPAs) ───────────────────────────
+  const [dataPagamento, setDataPagamento] = useState('');
+
+  // ── Salvamento do fechamento ───────────────────────────────────────────────
+  const [savingFechamento, setSavingFechamento] = useState(false);
+
+  // ── Edição manual do bruto ─────────────────────────────────────────────────
+  const [editingBrutoKey,   setEditingBrutoKey]   = useState<string | null>(null);
+  const [editingBrutoValue, setEditingBrutoValue] = useState('');
+
   // ── Exportação ─────────────────────────────────────────────────────────────
   const [exportingKey, setExportingKey] = useState<string | null>(null);
   const [exportingAll, setExportingAll] = useState(false);
@@ -166,14 +177,37 @@ export default function FechamentoFolhaPage() {
     });
   };
 
+  // ── Busca histórico de Cota Parte para calcular acumulado ─────────────────
+  const fetchHistoricoCotaParte = async (cid: string, mesAtual: string, anoAtual: string) => {
+    const { data } = await supabase
+      .from('folha_fechamentos')
+      .select('cooperado_nome, cooperado_matricula, cota_parte, mes, ano')
+      .eq('client_id', cid) as { data: FolhaFechamento[] | null };
+    if (!data) return new Map<string, number>();
+    const mapa = new Map<string, number>();
+    for (const row of data) {
+      if (row.mes === mesAtual && row.ano === anoAtual) continue; // exclui mês atual (não salvo ainda)
+      const key = row.cooperado_matricula?.trim() || row.cooperado_nome.trim().toLowerCase();
+      mapa.set(key, (mapa.get(key) ?? 0) + Number(row.cota_parte));
+    }
+    return mapa;
+  };
+
+  const aplicarAcumulado = (lista: ReturnType<typeof consolidarPorCooperado>, historico: Map<string, number>) =>
+    lista.map(c => {
+      const key = c.matricula?.trim() || c.nome.trim().toLowerCase();
+      const prev = historico.get(key) ?? 0;
+      return { ...c, cotaParteAcumulada: prev + c.cotaParte };
+    });
+
   // ── Selecionar relatório → consolidar ─────────────────────────────────────
-  const handleSelectReport = (report: StoredReport) => {
+  const handleSelectReport = async (report: StoredReport) => {
     setSelectedReport(report);
     const registros: PlantaoRecord[] = (report.parsed_data as any)?.registros ?? [];
-    const consolidados = applyDescontosGlobais(
-      consolidarPorCooperado(registros, valoresHora),
-      descontosGlobais,
-    );
+    const base = consolidarPorCooperado(registros, valoresHora);
+    const historico = clientId ? await fetchHistoricoCotaParte(clientId, mes, ano) : new Map<string, number>();
+    const comAcumulado = aplicarAcumulado(base, historico);
+    const consolidados = applyDescontosGlobais(comAcumulado, descontosGlobais);
     setCooperados(consolidados);
     setSelectedIds(new Set(consolidados.map(c => c.matricula || c.nome)));
     setTab('folha');
@@ -184,16 +218,18 @@ export default function FechamentoFolhaPage() {
   useEffect(() => {
     if (!selectedReport) return;
     const registros: PlantaoRecord[] = (selectedReport.parsed_data as any)?.registros ?? [];
-    const consolidados = applyDescontosGlobais(
-      consolidarPorCooperado(registros, valoresHora),
-      descontosGlobais,
-    );
-    setCooperados(consolidados);
-    setSelectedIds(prev => {
-      const keys = new Set(consolidados.map(c => c.matricula || c.nome));
-      const kept = new Set([...prev].filter(k => keys.has(k)));
-      return kept.size > 0 ? kept : keys;
-    });
+    const base = consolidarPorCooperado(registros, valoresHora);
+    (clientId ? fetchHistoricoCotaParte(clientId, mes, ano) : Promise.resolve(new Map<string, number>()))
+      .then(historico => {
+        const comAcumulado = aplicarAcumulado(base, historico);
+        const consolidados = applyDescontosGlobais(comAcumulado, descontosGlobais);
+        setCooperados(consolidados);
+        setSelectedIds(prev => {
+          const keys = new Set(consolidados.map(c => c.matricula || c.nome));
+          const kept = new Set([...prev].filter(k => keys.has(k)));
+          return kept.size > 0 ? kept : keys;
+        });
+      });
   }, [valoresHora]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Helpers para descontos globais ─────────────────────────────────────────
@@ -256,6 +292,26 @@ export default function FechamentoFolhaPage() {
     }));
   };
 
+  // ── Edição manual do valor bruto ──────────────────────────────────────────
+  const startEditBruto = (key: string, brutoAtual: number) => {
+    setEditingBrutoKey(key);
+    setEditingBrutoValue(String(brutoAtual.toFixed(2)).replace('.', ','));
+  };
+
+  const confirmEditBruto = (key: string) => {
+    const raw = editingBrutoValue.replace(',', '.');
+    const novo = parseFloat(raw);
+    if (!isNaN(novo) && novo >= 0) {
+      setCooperados(prev => prev.map(c => {
+        if ((c.matricula || c.nome) !== key) return c;
+        return recalcularComNovoBruto(c, novo);
+      }));
+    }
+    setEditingBrutoKey(null);
+  };
+
+  const cancelEditBruto = () => setEditingBrutoKey(null);
+
   // ── Seleção ────────────────────────────────────────────────────────────────
   const toggleCooperado = (key: string) => {
     setSelectedIds(prev => {
@@ -277,12 +333,21 @@ export default function FechamentoFolhaPage() {
   const competencia = `${mesLabel} / ${ano}`;
   const clienteNome = clients.find(c => c.id === clientId)?.name ?? '';
 
+  // ── Config do PDF (compartilhada por individual e lote) ───────────────────
+  const pdfConfig = {
+    competencia,
+    cliente: clienteNome,
+    dataPagto: dataPagamento
+      ? new Date(dataPagamento + 'T12:00:00').toLocaleDateString('pt-BR')
+      : undefined,
+  };
+
   // ── Exportar individual ────────────────────────────────────────────────────
   const handleExportIndividual = async (c: CooperadoConsolidado) => {
     const key = c.matricula || c.nome;
     setExportingKey(key);
     try {
-      await exportContraChequeConsolidadoIndividual(c, { competencia, cliente: clienteNome });
+      await exportContraChequeConsolidadoIndividual(c, pdfConfig);
       toast.success(`RPA de ${c.nome} gerado!`);
     } catch {
       toast.error('Erro ao gerar RPA.');
@@ -297,12 +362,42 @@ export default function FechamentoFolhaPage() {
     if (selecionados.length === 0) { toast.warning('Selecione ao menos um cooperado.'); return; }
     setExportingAll(true);
     try {
-      await exportContraChequeConsolidadoBatch(selecionados, { competencia, cliente: clienteNome });
+      await exportContraChequeConsolidadoBatch(selecionados, pdfConfig);
       toast.success(`${selecionados.length} RPAs gerados!`);
     } catch {
       toast.error('Erro ao gerar RPAs.');
     } finally {
       setExportingAll(false);
+    }
+  };
+
+  // ── Salvar fechamento (registra Cota Parte no histórico) ───────────────────
+  const handleSalvarFechamento = async () => {
+    if (!clientId || cooperados.length === 0) return;
+    setSavingFechamento(true);
+    try {
+      await supabase.from('folha_fechamentos')
+        .delete()
+        .eq('client_id', clientId).eq('mes', mes).eq('ano', ano);
+      await supabase.from('folha_fechamentos').insert(
+        cooperados.map(c => ({
+          client_id: clientId, mes, ano,
+          data_pagamento: dataPagamento || null,
+          cooperado_nome: c.nome,
+          cooperado_matricula: c.matricula || null,
+          cota_parte: c.cotaParte,
+          valor_bruto: c.totalBruto,
+        })),
+      );
+      // Recalcula acumulado com o mês atual já salvo
+      const historico = await fetchHistoricoCotaParte(clientId, '', ''); // busca tudo
+      const comAcumulado = aplicarAcumulado(cooperados, historico);
+      setCooperados(comAcumulado);
+      toast.success('Fechamento salvo! Cota Parte registrada no histórico.');
+    } catch {
+      toast.error('Erro ao salvar fechamento.');
+    } finally {
+      setSavingFechamento(false);
     }
   };
 
@@ -626,9 +721,38 @@ export default function FechamentoFolhaPage() {
             </div>
 
             {/* Ações */}
-            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginBottom: 12 }}>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
+              {/* Data de pagamento */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginRight: 4 }}>
+                <Calendar size={14} style={{ color: '#8a9ab5', flexShrink: 0 }} />
+                <label style={{ fontSize: '.75rem', color: '#4a5568', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                  Data de Pagamento:
+                </label>
+                <input
+                  type="date"
+                  value={dataPagamento}
+                  onChange={e => setDataPagamento(e.target.value)}
+                  style={{
+                    fontSize: '.78rem', border: '1px solid #e2e8f0', borderRadius: 6,
+                    padding: '4px 8px', color: '#0f2340', outline: 'none',
+                  }}
+                />
+              </div>
+
+              <div style={{ flex: 1 }} />
+
               <Button variant="outline" size="sm" onClick={toggleAll}>
                 {selectedIds.size === cooperados.length ? 'Desmarcar todos' : 'Selecionar todos'}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleSalvarFechamento}
+                disabled={savingFechamento || cooperados.length === 0}
+                style={{ gap: 5, borderColor: '#0f2340', color: '#0f2340' }}
+              >
+                {savingFechamento ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
+                Salvar Fechamento
               </Button>
               <Button
                 onClick={handleExportAll}
@@ -709,10 +833,45 @@ export default function FechamentoFolhaPage() {
                         </div>
                       </div>
 
-                      {/* Bruto */}
+                      {/* Bruto (editável) */}
                       <div style={{ textAlign: 'right' }}>
                         <p style={{ fontSize: '.65rem', color: '#8a9ab5', margin: '0 0 2px', fontWeight: 600 }}>BRUTO</p>
-                        <p style={{ fontSize: '.88rem', fontWeight: 700, color: '#0f2340', margin: 0 }}>{fmtR$(c.totalBruto)}</p>
+                        {editingBrutoKey === key ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 3, justifyContent: 'flex-end' }}>
+                            <input
+                              autoFocus
+                              value={editingBrutoValue}
+                              onChange={e => setEditingBrutoValue(e.target.value)}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') confirmEditBruto(key);
+                                if (e.key === 'Escape') cancelEditBruto();
+                              }}
+                              onBlur={() => confirmEditBruto(key)}
+                              style={{
+                                width: 80, textAlign: 'right', fontSize: '.82rem',
+                                fontWeight: 700, border: '1.5px solid #0f2340',
+                                borderRadius: 4, padding: '1px 4px', outline: 'none',
+                              }}
+                            />
+                            <button
+                              onMouseDown={e => { e.preventDefault(); confirmEditBruto(key); }}
+                              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: '#16a34a' }}
+                            ><Check size={12} /></button>
+                            <button
+                              onMouseDown={e => { e.preventDefault(); cancelEditBruto(); }}
+                              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: '#b91c1c' }}
+                            ><X size={12} /></button>
+                          </div>
+                        ) : (
+                          <div
+                            style={{ display: 'flex', alignItems: 'center', gap: 3, justifyContent: 'flex-end', cursor: 'pointer' }}
+                            title="Clique para editar o valor bruto"
+                            onClick={() => startEditBruto(key, c.totalBruto)}
+                          >
+                            <p style={{ fontSize: '.88rem', fontWeight: 700, color: '#0f2340', margin: 0 }}>{fmtR$(c.totalBruto)}</p>
+                            <Pencil size={10} style={{ color: '#8a9ab5', flexShrink: 0 }} />
+                          </div>
+                        )}
                       </div>
 
                       {/* INSS */}
@@ -727,6 +886,11 @@ export default function FechamentoFolhaPage() {
                       <div style={{ textAlign: 'right' }}>
                         <p style={{ fontSize: '.65rem', color: '#8a9ab5', margin: '0 0 2px', fontWeight: 600 }}>COTA PARTE</p>
                         <p style={{ fontSize: '.88rem', fontWeight: 700, color: '#b91c1c', margin: 0 }}>-{fmtR$(c.cotaParte)}</p>
+                        {c.cotaParteAcumulada !== undefined && c.cotaParteAcumulada > c.cotaParte && (
+                          <p style={{ fontSize: '.6rem', color: '#8a9ab5', margin: '1px 0 0' }}>
+                            Acum. {fmtR$(c.cotaParteAcumulada)}
+                          </p>
+                        )}
                       </div>
 
                       {/* Total descontos */}

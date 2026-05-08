@@ -109,14 +109,19 @@ function gerarDemonstrativoDoc(
   col(MGRY); lw(0.5);
   doc.rect(ML, HDR_Y, CW, HDR_H, 'D');
 
+  // Fundo azul CADES no container da logo
+  fill(NAVY);
+  doc.rect(ML, HDR_Y, LOGO_W, HDR_H, 'F');
+
   // Separador vertical após logo
+  col(MGRY); lw(0.5);
   doc.line(ML + LOGO_W, HDR_Y, ML + LOGO_W, HDR_Y + HDR_H);
 
   // Logo
   if (logo) {
     doc.addImage(logo, 'PNG', ML + 3, HDR_Y + 4, 38, 15);
   } else {
-    doc.setFontSize(13); doc.setFont('helvetica', 'bold'); txt(NAVY);
+    doc.setFontSize(13); doc.setFont('helvetica', 'bold'); txt(WHT);
     doc.text('CADES', ML + 5, HDR_Y + 14);
   }
 
@@ -163,31 +168,14 @@ function gerarDemonstrativoDoc(
   // Base do IRRF = a mesma base usada no cálculo (evita inconsistência entre base exibida e valor)
   const baseIRRF = irrfExtra?.tipo === 'percentual' ? c.totalBruto : 0;
 
-  // CRÉDITOS
-  if (c.diurno) {
-    rows.push([
-      String(seq++), '101', 'PRODUTIVIDADE DIURNA',
-      fmtNum(c.diurno.totalHoras),
-      fmtNum(c.totalDiurno), fmtNum(c.totalDiurno),
-      '', '',
-    ]);
-  }
-  if (c.noturno) {
-    rows.push([
-      String(seq++), '101', 'PRODUTIVIDADE NOTURNA',
-      fmtNum(c.noturno.totalHoras),
-      fmtNum(c.totalNoturno), fmtNum(c.totalNoturno),
-      '', '',
-    ]);
-  }
-  if (c.outros) {
-    rows.push([
-      String(seq++), '101', `PRODUTIVIDADE (${c.outros.turno})`,
-      fmtNum(c.outros.totalHoras),
-      fmtNum(c.outros.valor), fmtNum(c.outros.valor),
-      '', '',
-    ]);
-  }
+  // CRÉDITO — linha única de produtividade total
+  const totalHorasTodas = (c.diurno?.totalHoras ?? 0) + (c.noturno?.totalHoras ?? 0) + (c.outros?.totalHoras ?? 0);
+  rows.push([
+    String(seq++), '101', 'PRODUTIVIDADE TOTAL',
+    fmtNum(totalHorasTodas),
+    fmtNum(c.totalBruto), fmtNum(c.totalBruto),
+    '', '',
+  ]);
 
   // DÉBITOS fixos
   rows.push([
@@ -206,8 +194,8 @@ function gerarDemonstrativoDoc(
 
   rows.push([
     String(seq++), '202', 'QUOTAS PARTE - 001/010',
-    '1,00', '', '',
-    fmtNum(c.cotaParte), fmtNum(c.cotaParte),
+    '', '', '',
+    fmtNum(c.cotaParte), fmtNum(c.cotaParteAcumulada ?? c.cotaParte),
   ]);
 
   // Outros descontos extras (exceto IRRF já tratado)

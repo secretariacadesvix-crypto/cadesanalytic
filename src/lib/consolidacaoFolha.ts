@@ -41,8 +41,9 @@ export interface CooperadoConsolidado {
   totalBruto:   number;
 
   // Descontos padrão (calculados automaticamente)
-  inss:      number; // INSS_PERCENTUAL % do bruto
-  cotaParte: number; // COTA_PARTE_VALOR fixo
+  inss:               number; // INSS_PERCENTUAL % do bruto
+  cotaParte:          number; // COTA_PARTE_VALOR fixo (mês atual)
+  cotaParteAcumulada?: number; // soma histórica de todos os meses anteriores + atual
 
   // Descontos adicionais configurados pelo usuário
   descontosExtras: DescontoExtra[];
@@ -180,4 +181,11 @@ export function consolidarPorCooperado(
 /** Recalcula totais de um cooperado após alterar descontosExtras */
 export function recalcularCooperado(c: CooperadoConsolidado): CooperadoConsolidado {
   return calcTotais(c);
+}
+
+/** Substitui o valor bruto manualmente e recalcula INSS + totais */
+export function recalcularComNovoBruto(c: CooperadoConsolidado, novoBruto: number): CooperadoConsolidado {
+  const bruto = r2(Math.max(0, novoBruto));
+  const inss  = r2(bruto * INSS_PERCENTUAL / 100);
+  return calcTotais({ ...c, totalBruto: bruto, inss });
 }
