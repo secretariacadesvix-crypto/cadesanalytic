@@ -473,6 +473,9 @@ const SECTOR_NORMALIZATION_MAP: Record<string, string> = {
   'pronto socorro': 'PRONTO SOCORRO',
   'hemodinâmica': 'HEMODINÂMICA',
   'hemodinamica': 'HEMODINÂMICA',
+  'hemodiálise': 'HEMODIÁLISE',
+  'hemodalise': 'HEMODIÁLISE',
+  'setores diversos': 'SETORES DIVERSOS',
   'cme': 'CME',
   'ccih': 'CCIH',
   'cihdott': 'CIHDOTT',
@@ -614,6 +617,131 @@ function extractRecordsFromNewFormat(fullText: string): PlantaoRecord[] {
   return records;
 }
 
+// ─── FORMATO: CADES Financeiro "Cobrança ao Cliente" ─────────────────────────
+//
+// Estrutura: cooperado → summary ("N plantões | Xh | R$ Y") → linhas de plantão
+// Colunas por plantão: Data | Setor | Tipo | Horas | Valor Cliente
+// Sem Matrícula nem Profissão — profissão inferida pela taxa/hora.
+
+function isCadesCobrancaFormat(fullText: string): boolean {
+  return fullText.includes('Cobrança ao Cliente') && fullText.includes('TOTAL A COBRAR');
+}
+
+function inferProfissaoCobranca(valorHora: number): string {
+  const near = (a: number, b: number) => Math.abs(a - b) < 0.15;
+  if (near(valorHora, 12.80)) return 'TECNICO DE ENFERMAGEM';
+  if (near(valorHora, 14.50)) return 'TECNICO DE ENFERMAGEM';
+  if (near(valorHora, 13.89)) return 'TECNICO DE ENFERMAGEM';
+  if (near(valorHora, 15.90)) return 'TECNICO DE ENFERMAGEM';
+  if (near(valorHora, 21.40)) return 'ENFERMEIRO';
+  if (near(valorHora, 25.68)) return 'ENFERMEIRO';
+  return 'COOPERADO';
+}
+
+function extractMetadataCobranca(fullText: string): { cliente?: string; periodo?: string } {
+  const result: { cliente?: string; periodo?: string } = {};
+  const periodoMatch = fullText.match(/Cobran[çc]a ao Cliente\s*[—\-]\s*([\d/]+\s*[–\-]\s*[\d/]+)/i);
+  if (periodoMatch) result.periodo = cleanText(periodoMatch[1]);
+  // Cliente: linha logo após a linha do período
+  const clienteMatch = fullText.match(/Cobran[çc]a ao Cliente[^\n]*\n([^\n]+)/);
+  if (clienteMatch) result.cliente = cleanText(clienteMatch[1]);
+  return result;
+}
+
+function extractTotalCobranca(fullText: string): string | undefined {
+  const m = fullText.match(/TOTAL A COBRAR\s*\n?\s*R\$\s*([\d.,]+)/i);
+  return m ? m[1] : undefined;
+}
+
+function extractRecordsFromCobrancaFormat(fullText: string): PlantaoRecord[] {
+  const records: PlantaoRecord[] = [];
+  const lines = fullText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+
+  // DD/MM/YYYY  setor  Tipo  N.NNh  R$ N,NN
+  const DATA_ROW = /^(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+(Diurno|Noturno|Diarista)\s+([\d.]+)h\s+R\$\s*([\d.,]+)/i;
+  const SUMMARY  = /^\d+\s+plant[õo]es?\s*\|/i;
+  const SUBTOTAL = /^Subtotal\s+/i;
+  // Linhas de cabeçalho/rodapé a ignorar
+  const IGNORE   = /^(CADES Financeiro|Cobran[çc]a|PLANT[ÕO]ES$|TOTAL HORAS$|TOTAL A COBRAR|Data\s+Setor|Confidencial|Página\s+\d|\d+$|[\d.,]+h$)/i;
+
+  type Shift = { setor: string; tipo: string; horas: number; valor: number };
+  let pendingName = '';
+  let currentName = '';
+  let shifts: Shift[] = [];
+  let collecting = false;
+
+  const flush = () => {
+    if (!currentName || shifts.length === 0) { currentName = ''; shifts = []; collecting = false; return; }
+
+    const map = new Map<string, Shift & { count: number }>();
+    for (const s of shifts) {
+      const k = `${s.setor}|||${s.tipo}`;
+      if (!map.has(k)) map.set(k, { setor: s.setor, tipo: s.tipo, horas: 0, valor: 0, count: 0 });
+      const e = map.get(k)!;
+      e.horas  = Math.round((e.horas  + s.horas)  * 100) / 100;
+      e.valor  = Math.round((e.valor  + s.valor)  * 100) / 100;
+      e.count++;
+    }
+
+    for (const e of map.values()) {
+      const valorHora = e.horas > 0 ? Math.round(e.valor / e.horas * 100) / 100 : 0;
+      const turno     = normalizeTurno(e.tipo);
+      records.push({
+        matricula: '',
+        nome: currentName,
+        escalas: e.count,
+        escalasOriginal: String(e.count),
+        valorHora,
+        totalHoras: e.horas,
+        totalHorasOriginal: String(e.horas),
+        valorFinal: e.valor,
+        valorFinalOriginal: String(e.valor),
+        setor: normalizeSectorNew(e.setor),
+        turno,
+        profissao: inferProfissaoCobranca(valorHora),
+      });
+    }
+
+    currentName = ''; shifts = []; collecting = false;
+  };
+
+  for (const line of lines) {
+    // Data row — highest priority
+    const dm = line.match(DATA_ROW);
+    if (dm) {
+      if (!collecting && pendingName) { currentName = pendingName; pendingName = ''; collecting = true; }
+      const [,, setor, tipo, horasStr, valorStr] = dm;
+      shifts.push({ setor: setor.trim(), tipo: tipo.trim(), horas: parseFloat(horasStr), valor: parseNumber(valorStr) });
+      continue;
+    }
+
+    // Subtotal → end of cooperado
+    if (SUBTOTAL.test(line)) { flush(); pendingName = ''; continue; }
+
+    // Summary line ("N plantões | ...") → just metadata
+    if (SUMMARY.test(line)) continue;
+
+    // Known header/footer → ignore
+    if (IGNORE.test(line)) {
+      if (!collecting) pendingName = '';
+      continue;
+    }
+
+    // Standalone date without shift data → ignore
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(line)) continue;
+
+    // Any remaining line while not collecting → candidate for cooperado name
+    if (!collecting) {
+      if (!line.includes('|') && !line.includes('R$') && !line.match(/^\d/) && line.length < 80) {
+        pendingName = pendingName ? `${pendingName} ${line}` : line;
+      }
+    }
+  }
+
+  flush();
+  return records;
+}
+
 function isNewCadesFinanceiroFormat(fullText: string): boolean {
   return (
     fullText.includes('CADES Financeiro') ||
@@ -696,7 +824,12 @@ export async function parsePDF(file: File): Promise<ReportData> {
   let totalOriginal: string | undefined;
   let subtotalOriginal: string | undefined;
 
-  if (isNewCadesFinanceiroFormat(fullText)) {
+  if (isCadesCobrancaFormat(fullText)) {
+    console.log('[pdfParser] Formato detectado: CADES Financeiro (Cobrança ao Cliente)');
+    registros = extractRecordsFromCobrancaFormat(fullText);
+    metadata = extractMetadataCobranca(fullText);
+    totalOriginal = extractTotalCobranca(fullText);
+  } else if (isNewCadesFinanceiroFormat(fullText)) {
     console.log('[pdfParser] Formato detectado: CADES Financeiro (Relatório de Faturamento)');
     registros = extractRecordsFromNewFormat(fullText);
     metadata = extractMetadataNewFormat(fullText);
