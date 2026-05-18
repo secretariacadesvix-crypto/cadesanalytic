@@ -658,11 +658,13 @@ function extractRecordsFromCobrancaFormat(fullText: string): PlantaoRecord[] {
   const lines = fullText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
 
   // DD/MM/YYYY  setor  Tipo  N.NNh  R$ N,NN
-  const DATA_ROW = /^(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+(Diurno|Noturno|Diarista)\s+([\d.]+)h\s+R\$\s*([\d.,]+)/i;
-  const SUMMARY  = /^\d+\s+plant[õo]es?\s*\|/i;
-  const SUBTOTAL = /^Subtotal\s+/i;
-  // Linhas de cabeçalho/rodapé a ignorar
-  const IGNORE   = /^(CADES Financeiro|Cobran[çc]a|PLANT[ÕO]ES$|TOTAL HORAS$|TOTAL A COBRAR|Data\s+Setor|Confidencial|Página\s+\d|\d+$|[\d.,]+h$)/i;
+  const DATA_ROW  = /^(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+(Diurno|Noturno|Diarista)\s+([\d.]+)h\s+R\$\s*([\d.,]+)/i;
+  const SUMMARY   = /^\d+\s+plant[õo]es?\s*\|/i;
+  const SUBTOTAL  = /^Subtotal\s+/i;
+  // Linhas que pertencem à seção do cooperado — apenas pular, NÃO limpar pendingName
+  const SKIP_ONLY = /^(Data\s+Setor|Confidencial|Página\s+\d)/i;
+  // Linhas de cabeçalho global — pular E limpar pendingName (nova seção de relatório)
+  const IGNORE    = /^(CADES Financeiro|Cobran[çc]a|PLANT[ÕO]ES$|TOTAL HORAS$|TOTAL A COBRAR|\d+$|[\d.,]+h$)/i;
 
   type Shift = { setor: string; tipo: string; horas: number; valor: number };
   let pendingName = '';
@@ -721,7 +723,10 @@ function extractRecordsFromCobrancaFormat(fullText: string): PlantaoRecord[] {
     // Summary line ("N plantões | ...") → just metadata
     if (SUMMARY.test(line)) continue;
 
-    // Known header/footer → ignore
+    // Cabeçalho de coluna ou rodapé da seção → pular sem limpar nome
+    if (SKIP_ONLY.test(line)) continue;
+
+    // Cabeçalho global → pular e limpar pendingName
     if (IGNORE.test(line)) {
       if (!collecting) pendingName = '';
       continue;
