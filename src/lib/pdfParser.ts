@@ -586,7 +586,7 @@ function newFormatRowToRecords(row: NewFormatRowRaw): PlantaoRecord[] {
   return records;
 }
 
-const SKIP_LINE_NEW_FORMAT = /^(Subtotal|Total\b|Setor:|Cooperado|Documento|Emitido|Cliente|CADES|Relatório|Página|DIURNOS|NOTURNOS|DIARISTAS|TOTAL|Resumo)/i;
+const SKIP_LINE_NEW_FORMAT = /^(Subtotal|Total\b|Setor[:\s]|Cooperado|Documento|Emitido|Cliente|CADES|Relatório|Página|DIURNOS|NOTURNOS|DIARISTAS|TOTAL|Resumo|Per[íi]odo|R\$|\d+\s+plant)/i;
 
 function extractRecordsFromNewFormat(fullText: string): PlantaoRecord[] {
   const records: PlantaoRecord[] = [];
