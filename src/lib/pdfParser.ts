@@ -442,9 +442,13 @@ const FUNCOES_NEW_FORMAT: string[] = [
   'Médico(a)',
 ].sort((a, b) => b.length - a.length);
 
+// Fallback genérico para funções não mapeadas explicitamente acima, no padrão
+// "Técnico(a) de <Especialidade>" (ex: "Técnico de Hemodiálise", "Técnica de Radiologia").
+// Permite reconhecer novas especialidades/setores sem precisar atualizar FUNCOES_NEW_FORMAT.
+const FUNCAO_GENERICA_REGEX = /T[ée]cnic[oa]\(?a?\)?\s+de\s+[A-Za-zÀ-ÖØ-öø-ÿ]+/;
+
 function mapFuncaoProfissao(funcao: string): string {
   const u = funcao.toUpperCase();
-  if (u.includes('TÉCNICO') || u.includes('TECNICO')) return 'TECNICO DE ENFERMAGEM';
   if (u.includes('ENFERMEIRO')) return 'ENFERMEIRO';
   if (u.includes('ASSISTENTE SOCIAL')) return 'ASSISTENTE SOCIAL';
   if (u.includes('FONOAUDIÓLOGO') || u.includes('FONOAUDIOLOGO')) return 'FONOAUDIÓLOGO';
@@ -452,6 +456,11 @@ function mapFuncaoProfissao(funcao: string): string {
   if (u.includes('NUTRICIONISTA')) return 'NUTRICIONISTA';
   if (u.includes('PSICÓLOGO') || u.includes('PSICOLOGO')) return 'PSICOLOGO';
   if (u.includes('MÉDICO') || u.includes('MEDICO')) return 'MÉDICO';
+  if (u.includes('TÉCNICO') || u.includes('TECNICO')) {
+    if (u.includes('ENFERMAGEM')) return 'TECNICO DE ENFERMAGEM';
+    // Generaliza "TÉCNICO(A) DE X" → "TÉCNICO DE X" para especialidades novas
+    return u.replace(/\(A\)/g, '').replace(/\s+/g, ' ').trim();
+  }
   return u.trim() || 'NÃO INFORMADO';
 }
 
@@ -527,6 +536,15 @@ function parseLineNewFormat(line: string): NewFormatRowRaw | null {
       setor = prefix.substring(idx + func.length).trim();
       funcao = func;
       break;
+    }
+  }
+
+  if (!funcao) {
+    const generic = prefix.match(FUNCAO_GENERICA_REGEX);
+    if (generic && generic.index !== undefined) {
+      nome = prefix.substring(0, generic.index).trim();
+      setor = prefix.substring(generic.index + generic[0].length).trim();
+      funcao = generic[0];
     }
   }
 
